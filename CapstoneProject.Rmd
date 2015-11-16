@@ -1,0 +1,299 @@
+---
+title: "Coursera Data Science Specialization Capstone Project"
+author: "Boris Badmaev"
+date: "November 15, 2015"
+output: pdf_document
+---
+## Introduction
+
+This capstone project is the final part of Coursera Data Science specialization course taught by professors of the Johns Hopkins University. The data for this project was provided by Yelp ([Yelp dataset challenge][1]). Yelp.com and the Yelp mobile app publish crowd-sourced reviews about local businesses.  
+  
+The objective of this research is to predict if a "Vegetarian" category can be added to the list of categories of a business (restaurants) based on Yelp reviews, particularly based on a frequency of certain words (a.k.a. marker words) present in the reviews. The prediction algorithm will help Yelp to suggest owners to add "Vegetarian" tag/categories to their business categories in order to attract the vegetarian crowd and/or help vegetarian users search such businesses on Yelp.  
+  
+## Data
+The data for this capstone come from Yelp, which is a business founded in 2004 to "help people find great local businesses like dentists, hair stylists and mechanics." As of the second quarter of 2015, Yelp had a monthly average of 83 million unique visitors who visited Yelp via their mobile device and written more than 83 million reviews. There are 5 files in the Yelp Dataset, each file is composed of a single object type, one json-object per-line.  
+                                       
+In order to answer our question only two object types will be used: `business` and `review`. To load the data the following code was used:
+```{r data loading, eval=FALSE}
+business <- stream_in(file("yelp_academic_dataset_business.json"))
+business <- flatten(business)
+review <- stream_in(file("yelp_academic_dataset_review.json"))
+review <- flatten(review)
+```
+```{r read RDS files, echo=FALSE, cache=TRUE}
+business<-readRDS("business.Rds")
+review<-readRDS("review.Rds")
+```
+## Methods
+
+There are two major steps in our analysis: 
+  
+1. Explore reviews and come up with the list of "marker" words that we can used to identify whether a business serves/sells vegetarian food. In addition to that identify the "marker" words that usually associated with carnivorous diet.  
+
+2. Build a model that helps predicting whether a business can be associated with vegetarian or non-vegetarian diet based on frequency of "marker" words present in reviews for that business.  
+
+### Exploratory Analysis and Selection or Marker Words  
+  
+The **business** data frame contains Categories column that we can use to create two subsets of businesses:  
+
+a)	Have **Vegetarian|Vegan** tags  
+b)	Have **Steakhouses|Burgers|Barbeque|American (Traditional)** tags  
+
+Since these businesses already have been identified by owners as vegetarian/non-vegetarian they can be used for both: selection of vegetarian/non vegetarian marker words and for creation and testing of our prediction models.
+
+```{r creating data.v and data.c, cache=TRUE}
+# selecting vegetarian and carnivorous restraunts:
+v<-grepl("Vegetarian|Vegan", business$categories)
+c<-grepl("Steakhouses|Burgers|Barbeque|American (Traditional)", business$categories)
+business.v<-business[v,]
+business.c<-business[c,]
+# merging business data with reviews data
+data.v<-merge(business.v, review, by="business_id")
+data.c<-merge(business.c, review, by="business_id")
+```
+Then all reviews to be summarized per business 
+```{r summarize, cache=TRUE, warning=FALSE, message=FALSE}
+# summarizing reviews based on business_id
+library(dplyr)
+dataV<-data.v%>%group_by(business_id)%>%summarize(review=paste(text, collapse=" "))
+dataC<-data.c%>%group_by(business_id)%>%summarize(review=paste(text, collapse=" "))
+```
+Then we need to create one corpus for Vegetarian reviews and another one for Non-vegetarian reviews.
+```{r corpus creation, cache=TRUE, warning=FALSE, message=FALSE}
+library(tm)
+library(wordcloud)
+corpus.v<-Corpus(VectorSource(dataV$review))
+corpus.c<-Corpus(VectorSource(dataC$review))
+```
+Next a series of text transformations is to be performed:  
+- transform words to lower case  
+- remove so-called "stop words" (English)  
+- remove punctuation  
+- get rid of extra spaces  
+- remove numbers  
+```{r text transformations 1, cache=TRUE, echo=FALSE}
+# transform the words to lower case
+corpus.v<-tm_map(corpus.v, content_transformer(tolower))
+corpus.c<-tm_map(corpus.c, content_transformer(tolower))
+```
+```{r text transformation 2, cache=TRUE, echo=FALSE}
+# remove stop words (English)
+corpus.v<-tm_map(corpus.v, removeWords, stopwords("english"))
+corpus.c<-tm_map(corpus.c, removeWords, stopwords("english"))
+```
+```{r text transformation 3, cache=TRUE, echo=FALSE}
+# remove punctuation
+corpus.v<-tm_map(corpus.v, removePunctuation)
+corpus.c<-tm_map(corpus.c, removePunctuation)
+```
+```{r text transformation 4, cache=TRUE, echo=FALSE}
+# strip out extra whitespaces
+corpus.v<-tm_map(corpus.v, stripWhitespace)
+corpus.c<-tm_map(corpus.c, stripWhitespace)
+```
+```{r text transformation 5, cache=TRUE, echo=FALSE}
+# remove numbers
+corpus.v<-tm_map(corpus.v, removeNumbers)
+corpus.c<-tm_map(corpus.c, removeNumbers)
+```
+Through multiple iteration it was found out that there is a lot of "noise" - the words that do not characterize the food or cuisine. Examples of such words would be: "restaurant", "yelp", "awesome", "table", "staff", etc. Thus we need to remove these words too.
+```{r noisy words, echo=FALSE, cache=TRUE }
+words0<-c("restaurant","place","yelp","food","good","bad","great","awesome","nice","order","time","just","get","one","love","service","like","really","back","also","menu","can","will","ordered","delicious","try","dont","live","little","got","well","always","even","lunch","eat","best","first","pretty","much","friendly","came","didnt","staff","definitely","went","amazing","make","never","come","think","meal","everything","better","know","made","people","bit","two","something","want","wait","favorite","going","tasty","way","still","tried","location","happy","dishes","side","say","right","cant","many","table","now","places","price","youre","drink","super","visit","prices","loved","items","area","another","different","eating","small","atmosphere","recommend","big","enough","see","day","take", "perfect", "expect", "reason", "manager", "wife", "today", "portion", "returning", "kid", "restaurants")
+
+words1<-c("dish", "times", "ever", "taste", "though", "experience", "since", "next", "sure", "every", "thing", "wasnt", "bar", "options", "give", "dinner", "find", "find", "new", "said", "lot", "around", "night", "server", "excellent", "minutes", "last", "house", "stars", "friends", "hour", "took", "vegas", "friend", "things", "drinks", "feel", "waiter", "surprise", "parking", "fun", "ate", "visit")
+
+words2<-c("selection", "worth", "quite", "full", "asked", "thats", "looking", "however", "long", "probably", "huge", "perfect", "home", "thought", "usually", "nothing", "served", "actually", "ill", "wanted", "kind", "free", "quality", "tasted", "found", "enjoyed", "anything", "maybe", "enjoy", "large", "away", "plate", "decided", "overall", "top", "clean", "need", "spot", "town", "check", "half", "almost", "work","ask", "coming", "review", "without", "yummy", "busy", "far", "husband", "wait","especially", "hard", "special", "everyone", "open", "told", "fantastic")
+
+words3<-c("seat","waitress", "used", "portions", "else", "must", "couple", "trying", "fan", "inside", "least", "tables", "disappointed", "left", "looked", "dining", "outside", "liked", "look", "getting", "put", "wonderful", "three", "cafe", "decent", "real", "reviews", "fast", "decor", "high", "quick", "cool", "wish", "makes", "doesnt", "although", "absolutely", "flavorful", "comes", "isnt", "years", "less", "use", "kitchen")
+
+```
+
+```{r removing words0, cache=TRUE}
+corpus.v<-tm_map(corpus.v, removeWords, words0)
+corpus.c<-tm_map(corpus.c, removeWords, words0)
+```
+
+```{r removing words, echo=FALSE, cache=TRUE}
+corpus.v<-tm_map(corpus.v, removeWords, words1)
+corpus.c<-tm_map(corpus.c, removeWords, words1)
+corpus.v<-tm_map(corpus.v, removeWords, words2)
+corpus.c<-tm_map(corpus.c, removeWords, words2)
+corpus.v<-tm_map(corpus.v, removeWords, words3)
+corpus.c<-tm_map(corpus.c, removeWords, words3)
+```
+After removing these "noisy" words we're ready to come up with the lists of terms (marker words) from the reviews that are used more often to characterized the vegetarian/non-vegetarian food/cuisine. These terms later will be used in creating the prediction model.
+Now let's see what are the most frequent terms and demonstrate the corresponding word clouds. In order to do that we will create Document-Term Matrix and calculate frequency of the all the words. Then the results will be sorted and presented graphically via wordcloud function:  
+```{r word cloud, cache=TRUE, warning=FALSE, message=FALSE, echo=FALSE}
+# building DTM(document-term-matrix) 
+dtm.v<-DocumentTermMatrix(corpus.v)
+dtm.c<-DocumentTermMatrix(corpus.c)
+freq.v<-colSums(as.matrix(dtm.v))
+freq.c<-colSums(as.matrix(dtm.c))
+# sorting
+freq.v<-sort(freq.v, decreasing = TRUE)
+freq.c<-sort(freq.c, decreasing = TRUE)
+```
+```{r clouds, cache=TRUE, warning=FALSE, message=FALSE, echo=FALSE}
+library(wordcloud)
+#display word clouds
+set.seed(12345)
+par(mfrow=c(1,2), mar=c(1,1,1,1))
+words.v<-names(freq.v)
+words.c<-names(freq.c)
+wordcloud(words.v, freq.v, scale=c(3,.1), min.freq=1500, colors="green")
+wordcloud(words.c, freq.c, scale=c(4,.1), min.freq=9000, colors="red")
+```
+Ok, now we can make an intelligent choice of "marker" words that are frequent in vegetarian vs non-vegetarian reviews:  
+**Vegetarian terms:** "chicken", "vegetarian", "vegan", "veggie", "indian", "salad", "healthy", "fresh", "cheese", "hummus", "green", "pizza", "thai", "soup", "eggplant", "curry"  
+**Non-vegetarian terms:** "burger", "steak", "fries", "meat", "rib", "bbq", "beef", "pork", "bacon", "grill", "sauce"  
+
+### Prediction models creation
+Now let's start by preparing the training and test datasets.  
+First, we are going to re-use the same merged datasets we had in the previous steps: data.v (315) and data.c (2460).
+We will add **vflag** column to both datasets that we want our model to predict. It will have a binomial outcome: vegetarian vs. non-vegetarian. For the business in training/test data the values are known.  
+```{r, cache=TRUE, message=FALSE, warning=FALSE, echo=FALSE}
+library(dplyr)
+# grouping by business_id and summarizing the reviews
+data_v<-data.v%>%group_by(business_id)%>% summarize(review=paste(text, collapse=" "))
+data_c<-data.c%>%group_by(business_id)%>% summarize(review=paste(text, collapse=" "))
+#specifying vflag
+data_v$vflag<-rep("vegetarian", length(data_v$business_id))
+data_c$vflag<-rep("non-vegetarian", length(data_c$business_id))
+# adding terms as columns and calculating their frequency (showing first terms only)
+library(stringr)
+data_v$vegetarian<-str_count(data_v$review,"[Vv]egetarian(s)?")
+data_v$burger<-str_count(data_v$review,"[Bb]urger(s)?")
+```
+```{r, echo=FALSE, cache=TRUE, message=FALSE, warning=FALSE}
+library(stringr)
+#v-terms
+data_v$chicken<-str_count(data_v$review,"[Cc]hicken(s)?")
+data_v$vegan<-str_count(data_v$review,"[Vv]egan(s)?")
+data_v$veggie<-str_count(data_v$review,"[Vv]eggie(s)?")
+data_v$indian<-str_count(data_v$review,"[Ii]ndian")
+data_v$salad<-str_count(data_v$review,"[Ss]alad(s)?")
+data_v$healthy<-str_count(data_v$review,"[Hh]ealthy")
+data_v$fresh<-str_count(data_v$review,"[Ff]resh")
+data_v$cheese<-str_count(data_v$review,"[Cc]heese")
+data_v$hummus<-str_count(data_v$review,"[Hh]ummus")
+data_v$green<-str_count(data_v$review,"[Gg]reen(s)?")
+data_v$pizza<-str_count(data_v$review,"[Pp]izza(s)?")
+data_v$thai<-str_count(data_v$review,"[Tt]hai")
+data_v$soup<-str_count(data_v$review,"[Ss]oup(s)?")
+data_v$eggplant<-str_count(data_v$review,"[Ee]ggplant(s)?")
+data_v$curry<-str_count(data_v$review,"[Cc]urry")
+# c-terms
+data_v$steak<-str_count(data_v$review,"[Ss]teak(s)?")
+data_v$fries<-str_count(data_v$review,"[Ff]ries")
+data_v$meat<-str_count(data_v$review,"[Mm]eat")
+data_v$rib<-str_count(data_v$review,"[Rr]ib(s)?")
+data_v$bbq<-str_count(data_v$review,"[Bb][Bb][Qq]")
+data_v$beef<-str_count(data_v$review,"[Bb]eef(s)?")
+data_v$pork<-str_count(data_v$review,"[Pp]ork")
+data_v$bacon<-str_count(data_v$review,"[Bb]acon")
+data_v$grill<-str_count(data_v$review,"[Gg]rill(s)?")
+data_v$sauce<-str_count(data_v$review,"[Ss]auce(s)?")
+```
+In addition to *vflag* we added 27 columns - one "marker" word per column. The numbers in these 27 columns represent frequency of a particular "marker" word in the summarized reviews for a particular business. 
+```{r, cache=TRUE, echo=FALSE}
+data_c$vegetarian<-str_count(data_c$review,"[Vv]egetarian(s)?")
+data_c$burger<-str_count(data_c$review,"[Bb]urger(s)?")
+```
+```{r echo=FALSE, cache=TRUE}
+#v-terms
+data_c$chicken<-str_count(data_c$review,"[Cc]hicken(s)?")
+data_c$vegan<-str_count(data_c$review,"[Vv]egan(s)?")
+data_c$veggie<-str_count(data_c$review,"[Vv]eggie(s)?")
+data_c$indian<-str_count(data_c$review,"[Ii]ndian")
+data_c$salad<-str_count(data_c$review,"[Ss]alad(s)?")
+data_c$healthy<-str_count(data_c$review,"[Hh]ealthy")
+data_c$fresh<-str_count(data_c$review,"[Ff]resh")
+data_c$cheese<-str_count(data_c$review,"[Cc]heese")
+data_c$hummus<-str_count(data_c$review,"[Hh]ummus")
+data_c$green<-str_count(data_c$review,"[Gg]reen(s)?")
+data_c$pizza<-str_count(data_c$review,"[Pp]izza(s)?")
+data_c$thai<-str_count(data_c$review,"[Tt]hai")
+data_c$soup<-str_count(data_c$review,"[Ss]oup(s)?")
+data_c$eggplant<-str_count(data_c$review,"[Ee]ggplant(s)?")
+data_c$curry<-str_count(data_c$review,"[Cc]urry")
+# c-terms
+data_c$steak<-str_count(data_c$review,"[Ss]teak(s)?")
+data_c$fries<-str_count(data_c$review,"[Ff]ries")
+data_c$meat<-str_count(data_c$review,"[Mm]eat")
+data_c$rib<-str_count(data_c$review,"[Rr]ib(s)?")
+data_c$bbq<-str_count(data_c$review,"[Bb][Bb][Qq]")
+data_c$beef<-str_count(data_c$review,"[Bb]eef(s)?")
+data_c$pork<-str_count(data_c$review,"[Pp]ork")
+data_c$bacon<-str_count(data_c$review,"[Bb]acon")
+data_c$grill<-str_count(data_c$review,"[Gg]rill(s)?")
+data_c$sauce<-str_count(data_c$review,"[Ss]auce(s)?")
+```
+```{r, cache=TRUE, echo=FALSE}
+data_v<-data_v[,-c(1:2)]
+data_c<-data_c[,-c(1:2)]
+```
+Let's mix vegetarian and non-vegetarian datasets together to create Train and Test datasets.
+```{r train and test, cache=TRUE, warning=FALSE, message=FALSE}
+library(caret)
+inTrain.v<-createDataPartition(y=data_v$vflag, p=0.7, list=FALSE)
+train.v<-data_v[inTrain.v,]
+test.v<-data_v[-inTrain.v,]
+inTrain.c<-createDataPartition(y=data_c$vflag, p=0.7, list=FALSE)
+train.c<-data_c[inTrain.c,]
+test.c<-data_c[-inTrain.c,]
+train<-rbind(train.v, train.c)
+test<-rbind(test.v, test.c)
+train$vflag<-as.factor(train$vflag)
+test$vflag<-as.factor(test$vflag)
+```
+Let's split the train dataset further so we can cross-validate the prediction results
+```{r, cache=TRUE}
+inTrain<-createDataPartition(y=train$vflag, p=0.7, list=FALSE)
+subTrain<-train[inTrain,]
+subTest<-train[-inTrain,]
+```
+###Model 1: logistic regression model
+```{r glm, cache=TRUE, warning=FALSE, message=FALSE }
+fit_glm<-glm(vflag~., data=subTrain, family="binomial")
+summary(fit_glm)
+```
+So based on summary we can say that, for example, for every increase of frequency of "vegetarian" word in the reviews the log odds of having "vegetarian" category for this business increases by 1.66. That's pretty predictable. What surprised me was that "eggplant" in the reviews actually reduced the log odds of having vegetarian tag (to be honest "eggplant" wasn't in the vegetarian cloud - I added it as my favorite vegetarian dish)
+
+###Model 2: Random Forrest
+```{r random forest, cache=TRUE, warning=FALSE, message=FALSE}
+library(randomForest)
+fit_rf<-randomForest(vflag~., data=subTrain, type="class")
+```
+
+##Results
+Let's predict the vflag outcome using our two models
+```{r predictions, cache=TRUE}
+prob_glm<-predict(fit_glm, subTest,type="response")
+predict_glm<-factor(ifelse(prob_glm>0.5, "vegetarian", "non-vegetarian"))
+predict_rf<-predict(fit_rf, subTest)
+confusionMatrix(predict_glm, subTest$vflag)
+confusionMatrix(predict_rf, subTest$vflag)
+```
+Here the Logistic Regression model performed a bit better than Random Forest.
+Now let's do our final check and see how well our prediction models work on **test** dataset
+```{r final prediction, cache=TRUE, warning=FALSE, message=FALSE}
+f.prob_glm<-predict(fit_glm, test, type="response")
+f.predict_glm<-factor(ifelse(f.prob_glm>0.5, "vegetarian", "non-vegetarian"))
+f.predict_rf<-predict(fit_rf, test)
+confusionMatrix(f.predict_glm, test$vflag)
+confusionMatrix(f.predict_rf, test$vflag)
+```
+As we can see here both algorithms are pretty close to each other and performed with consistent accuracy (~96%).  
+To summarize we can say that our models can confidently predict the "vegetarian/non-vegetarian" category based on frequency of "marker" words in the reviews. 
+
+##Discussion
+Do to limitations of this project some of the interesting follow up questions fall out of scope of this paper. I would be interesting to cover the following topics in the future:  
+- how algorithms can be optimized? For example, choose less "marker" words etc.  
+- can we include frequency of 2-grams, 3-grams or phrases?  
+- can similar approach be used for predicting other business categories?  
+- check how our prediction algorithms work for other businesses (that were not used in "marker" words selection or prediction model creation processes). I did run algorithms to come up with predictions and consistently received the results I expected (e.g. McDonald's: non-vegetarian, P.F.Chang: vegetarian)  
+- create an app that based on business_id (or name) gives back the vflag (vegetarian/non-vegetarian) outcome and probability.
+
+
+
+[1]: http://www.yelp.com/dataset_challenge
